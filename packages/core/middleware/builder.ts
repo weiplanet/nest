@@ -1,79 +1,70 @@
-import { MiddlewareConfiguration } from '@nestjs/common/interfaces/middleware/middleware-configuration.interface';
-import { InvalidMiddlewareConfigurationException } from '../errors/exceptions/invalid-middleware-configuration.exception';
-import {
-  isUndefined,
-  isNil,
-  isFunction,
-} from '@nestjs/common/utils/shared.utils';
-import { BindResolveMiddlewareValues } from '@nestjs/common/utils/bind-resolve-values.util';
-import { Logger } from '@nestjs/common/services/logger.service';
-import {
-  Type,
-  MiddlewareConsumer,
-  RequestMappingMetadata,
-} from '@nestjs/common/interfaces';
-import { MiddlewareConfigProxy } from '@nestjs/common/interfaces/middleware';
-import { RoutesMapper } from './routes-mapper';
-import { NestMiddleware } from '@nestjs/common';
-import { filterMiddleware } from './utils';
 import { flatten } from '@nestjs/common/decorators/core/dependencies.decorator';
+import {
+  HttpServer,
+  MiddlewareConsumer,
+  Type,
+} from '@nestjs/common/interfaces';
+import {
+  MiddlewareConfigProxy,
+  RouteInfo,
+} from '@nestjs/common/interfaces/middleware';
+import { MiddlewareConfiguration } from '@nestjs/common/interfaces/middleware/middleware-configuration.interface';
+import { RoutesMapper } from './routes-mapper';
+import { filterMiddleware } from './utils';
+import { iterate } from 'iterare';
 
 export class MiddlewareBuilder implements MiddlewareConsumer {
   private readonly middlewareCollection = new Set<MiddlewareConfiguration>();
-  private readonly logger = new Logger(MiddlewareBuilder.name);
 
-  constructor(private readonly routesMapper: RoutesMapper) {}
+  constructor(
+    private readonly routesMapper: RoutesMapper,
+    private readonly httpAdapter: HttpServer,
+  ) {}
 
   public apply(
-    ...middleware: Array<Type<any> | Function | any>,
+    ...middleware: Array<Type<any> | Function | any>
   ): MiddlewareConfigProxy {
     return new MiddlewareBuilder.ConfigProxy(this, flatten(middleware));
   }
 
-  public build() {
+  public build(): MiddlewareConfiguration[] {
     return [...this.middlewareCollection];
   }
 
-  private bindValuesToResolve(
-    middleware: Type<any> | Type<any>[],
-    resolveParams: any[],
-  ) {
-    if (isNil(resolveParams)) {
-      return middleware;
-    }
-    const bindArgs = BindResolveMiddlewareValues(resolveParams);
-    return [].concat(middleware).map(bindArgs);
+  public getHttpAdapter(): HttpServer {
+    return this.httpAdapter;
   }
 
-  private static ConfigProxy = class implements MiddlewareConfigProxy {
-    private contextParameters = null;
-    private includedRoutes: any[];
+  private static readonly ConfigProxy = class implements MiddlewareConfigProxy {
+    private excludedRoutes: RouteInfo[] = [];
 
-    constructor(private readonly builder: MiddlewareBuilder, middleware) {
-      this.includedRoutes = filterMiddleware(middleware);
+    constructor(
+      private readonly builder: MiddlewareBuilder,
+      private readonly middleware: Array<Type<any> | Function | any>,
+    ) {}
+
+    public getExcludedRoutes(): RouteInfo[] {
+      return this.excludedRoutes;
     }
 
-    public with(...args): MiddlewareConfigProxy {
-      this.contextParameters = args;
+    public exclude(
+      ...routes: Array<string | RouteInfo>
+    ): MiddlewareConfigProxy {
+      this.excludedRoutes = this.getRoutesFlatList(routes);
       return this;
     }
 
     public forRoutes(
-      ...routes: Array<string | any>,
+      ...routes: Array<string | Type<any> | RouteInfo>
     ): MiddlewareConsumer {
-      const {
-        middlewareCollection,
-        bindValuesToResolve,
-        routesMapper,
-      } = this.builder;
+      const { middlewareCollection } = this.builder;
 
-      const forRoutes = this.mapRoutesToFlatList(
-        routes.map(route => routesMapper.mapRouteToRouteProps(route)),
-      );
+      const forRoutes = this.getRoutesFlatList(routes);
       const configuration = {
-        middleware: bindValuesToResolve(
-          this.includedRoutes,
-          this.contextParameters,
+        middleware: filterMiddleware(
+          this.middleware,
+          this.excludedRoutes,
+          this.builder.getHttpAdapter(),
         ),
         forRoutes,
       };
@@ -81,8 +72,15 @@ export class MiddlewareBuilder implements MiddlewareConsumer {
       return this.builder;
     }
 
-    private mapRoutesToFlatList(forRoutes) {
-      return forRoutes.reduce((a, b) => a.concat(b));
+    private getRoutesFlatList(
+      routes: Array<string | Type<any> | RouteInfo>,
+    ): RouteInfo[] {
+      const { routesMapper } = this.builder;
+
+      return iterate(routes)
+        .map(route => routesMapper.mapRouteToRouteInfo(route))
+        .flatten()
+        .toArray();
     }
   };
 }

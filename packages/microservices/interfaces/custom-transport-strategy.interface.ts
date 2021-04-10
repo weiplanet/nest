@@ -1,4 +1,7 @@
+import { Transport } from '../enums';
+
 export interface CustomTransportStrategy {
-  listen(callback: () => void);
-  close();
+  readonly transportId?: Transport;
+  listen(callback: () => void): any;
+  close(): any;
 }

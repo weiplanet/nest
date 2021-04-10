@@ -1,55 +1,43 @@
 import { expect } from 'chai';
+import stringify from 'fast-safe-stringify';
 import * as hash from 'object-hash';
-import { SingleScope } from '../../../common';
+import * as sinon from 'sinon';
 import { ModuleTokenFactory } from '../../injector/module-token-factory';
 
 describe('ModuleTokenFactory', () => {
+  const moduleId = 'constId';
   let factory: ModuleTokenFactory;
+
   beforeEach(() => {
     factory = new ModuleTokenFactory();
+    sinon.stub(factory, 'getModuleId').returns(moduleId);
   });
   describe('create', () => {
     class Module {}
-    it('should force global scope when it is not set', () => {
-      const scope = 'global';
-      const token = factory.create(Module as any, [Module as any], undefined);
+    it('should return expected token', () => {
+      const type = Module;
+      const token = factory.create(type, undefined);
       expect(token).to.be.deep.eq(
         hash({
+          id: moduleId,
           module: Module.name,
           dynamic: '',
-          scope,
-        }),
-      );
-    });
-    it('should returns expected token', () => {
-      const token = factory.create(
-        SingleScope()(Module) as any,
-        [Module as any],
-        undefined,
-      );
-      expect(token).to.be.deep.eq(
-        hash({
-          module: Module.name,
-          dynamic: '',
-          scope: [Module.name],
         }),
       );
     });
     it('should include dynamic metadata', () => {
-      const token = factory.create(
-        SingleScope()(Module) as any,
-        [Module as any],
-        {
-          components: [{}],
-        } as any,
-      );
+      const type = Module;
+      const token = factory.create(type, {
+        providers: [{}],
+      } as any);
+
       expect(token).to.be.deep.eq(
         hash({
+          id: moduleId,
           module: Module.name,
-          dynamic: JSON.stringify({
-            components: [{}],
+          dynamic: stringify({
+            providers: [{}],
           }),
-          scope: [Module.name],
         }),
       );
     });
@@ -62,10 +50,35 @@ describe('ModuleTokenFactory', () => {
   });
   describe('getDynamicMetadataToken', () => {
     describe('when metadata exists', () => {
-      it('should return stringified metadata', () => {
-        const metadata = { components: ['', {}] };
+      it('should return hash', () => {
+        const metadata = { providers: ['', {}] };
         expect(factory.getDynamicMetadataToken(metadata as any)).to.be.eql(
           JSON.stringify(metadata),
+        );
+      });
+      it('should return hash with class', () => {
+        class Provider {}
+        const metadata = { providers: [Provider], exports: [Provider] };
+        expect(factory.getDynamicMetadataToken(metadata)).to.be.eql(
+          '{"providers":["Provider"],"exports":["Provider"]}',
+        );
+      });
+      it('should serialize symbols in a dynamic metadata object', () => {
+        const metadata = {
+          providers: [
+            {
+              provide: Symbol('a'),
+              useValue: 'a',
+            },
+            {
+              provide: Symbol('b'),
+              useValue: 'b',
+            },
+          ],
+        };
+
+        expect(factory.getDynamicMetadataToken(metadata)).to.be.eql(
+          '{"providers":[{"provide":"Symbol(a)","useValue":"a"},{"provide":"Symbol(b)","useValue":"b"}]}',
         );
       });
     });
@@ -73,15 +86,6 @@ describe('ModuleTokenFactory', () => {
       it('should return empty string', () => {
         expect(factory.getDynamicMetadataToken(undefined)).to.be.eql('');
       });
-    });
-  });
-  describe('getScopeStack', () => {
-    it('should map metatypes to the array with last metatype', () => {
-      const metatype1 = () => {};
-      const metatype2 = () => {};
-      expect(
-        factory.getScopeStack([metatype1 as any, metatype2 as any]),
-      ).to.be.eql([metatype2.name]);
     });
   });
 });

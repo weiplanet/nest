@@ -1,7 +1,7 @@
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import * as request from 'supertest';
-import { ApplicationModule } from './../src/app.module';
+import { ApplicationModule } from '../src/app.module';
 
 describe('Mongoose', () => {
   let server;
@@ -27,7 +27,7 @@ describe('Mongoose', () => {
       .post('/cats')
       .send(cat)
       .expect(201)
-      .expect(({body}) => body.name === cat.name);
+      .expect(({ body }) => body.name === cat.name);
   });
 
   afterEach(async () => {

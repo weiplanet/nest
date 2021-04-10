@@ -1,32 +1,33 @@
-import { Controller, Get, Post, Body, Param } from '@nestjs/common';
-import { CreateCatDto } from './dto/create-cat.dto';
-import { CatsService } from './cats.service';
-import { Cat } from './interfaces/cat.interface';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import {
-  ApiUseTags,
   ApiBearerAuth,
-  ApiResponse,
   ApiOperation,
+  ApiResponse,
+  ApiTags,
 } from '@nestjs/swagger';
+import { CatsService } from './cats.service';
+import { CreateCatDto } from './dto/create-cat.dto';
+import { Cat } from './entities/cat.entity';
 
 @ApiBearerAuth()
-@ApiUseTags('cats')
+@ApiTags('cats')
 @Controller('cats')
 export class CatsController {
   constructor(private readonly catsService: CatsService) {}
 
   @Post()
-  @ApiOperation({ title: 'Create cat' })
-  @ApiResponse({
-    status: 201,
-    description: 'The record has been successfully created.',
-  })
+  @ApiOperation({ summary: 'Create cat' })
   @ApiResponse({ status: 403, description: 'Forbidden.' })
-  async create(@Body() createCatDto: CreateCatDto) {
-    this.catsService.create(createCatDto);
+  async create(@Body() createCatDto: CreateCatDto): Promise<Cat> {
+    return this.catsService.create(createCatDto);
   }
 
   @Get(':id')
+  @ApiResponse({
+    status: 200,
+    description: 'The found record',
+    type: Cat,
+  })
   findOne(@Param('id') id: string): Cat {
     return this.catsService.findOne(+id);
   }

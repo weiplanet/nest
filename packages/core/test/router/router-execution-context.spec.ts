@@ -1,42 +1,48 @@
-import * as sinon from 'sinon';
+import { ForbiddenException } from '@nestjs/common/exceptions/forbidden.exception';
 import { expect } from 'chai';
-import { RouteParamtypes } from '../../../common/enums/route-paramtypes.enum';
+import { of } from 'rxjs';
+import * as sinon from 'sinon';
+import { PassThrough } from 'stream';
+import { HttpException, HttpStatus, RouteParamMetadata } from '../../../common';
 import { CUSTOM_ROUTE_AGRS_METADATA } from '../../../common/constants';
-import { createRouteParamDecorator } from '../../../common/decorators/http/create-route-param-metadata.decorator';
-import { RouterExecutionContext } from '../../router/router-execution-context';
-import { RouteParamsMetadata, Request, Body } from '../../../common';
-import { RouteParamsFactory } from '../../router/route-params-factory';
-import { PipesContextCreator } from '../../pipes/pipes-context-creator';
-import { PipesConsumer } from '../../pipes/pipes-consumer';
+import { RouteParamtypes } from '../../../common/enums/route-paramtypes.enum';
+import { AbstractHttpAdapter } from '../../adapters';
 import { ApplicationConfig } from '../../application-config';
+import { FORBIDDEN_MESSAGE } from '../../guards/constants';
 import { GuardsConsumer } from '../../guards/guards-consumer';
 import { GuardsContextCreator } from '../../guards/guards-context-creator';
+import { HandlerResponseBasicFn } from '../../helpers/handler-metadata-storage';
 import { NestContainer } from '../../injector/container';
-import { InterceptorsContextCreator } from '../../interceptors/interceptors-context-creator';
 import { InterceptorsConsumer } from '../../interceptors/interceptors-consumer';
-import { ExpressAdapter } from '../../adapters/express-adapter';
+import { InterceptorsContextCreator } from '../../interceptors/interceptors-context-creator';
+import { PipesConsumer } from '../../pipes/pipes-consumer';
+import { PipesContextCreator } from '../../pipes/pipes-context-creator';
+import { RouteParamsFactory } from '../../router/route-params-factory';
+import { RouterExecutionContext } from '../../router/router-execution-context';
+import { NoopHttpAdapter } from '../utils/noop-adapter.spec';
 
 describe('RouterExecutionContext', () => {
   let contextCreator: RouterExecutionContext;
-  let callback;
+  let callback: any;
   let applySpy: sinon.SinonSpy;
-  let bindSpy: sinon.SinonSpy;
   let factory: RouteParamsFactory;
   let consumer: PipesConsumer;
   let guardsConsumer: GuardsConsumer;
+  let interceptorsConsumer: InterceptorsConsumer;
+  let adapter: AbstractHttpAdapter;
 
   beforeEach(() => {
     callback = {
       bind: () => ({}),
       apply: () => ({}),
     };
-    bindSpy = sinon.spy(callback, 'bind');
     applySpy = sinon.spy(callback, 'apply');
 
     factory = new RouteParamsFactory();
     consumer = new PipesConsumer();
     guardsConsumer = new GuardsConsumer();
-
+    interceptorsConsumer = new InterceptorsConsumer();
+    adapter = new NoopHttpAdapter({});
     contextCreator = new RouterExecutionContext(
       factory,
       new PipesContextCreator(new NestContainer(), new ApplicationConfig()),
@@ -44,13 +50,13 @@ describe('RouterExecutionContext', () => {
       new GuardsContextCreator(new NestContainer()),
       guardsConsumer,
       new InterceptorsContextCreator(new NestContainer()),
-      new InterceptorsConsumer(),
-      new ExpressAdapter({}),
+      interceptorsConsumer,
+      adapter,
     );
   });
   describe('create', () => {
     describe('when callback metadata is not undefined', () => {
-      let metadata: RouteParamsMetadata;
+      let metadata: Record<number, RouteParamMetadata>;
       let exchangeKeysForValuesSpy: sinon.SinonSpy;
       beforeEach(() => {
         metadata = {
@@ -60,8 +66,15 @@ describe('RouterExecutionContext', () => {
             data: 'test',
           },
         };
-        sinon.stub(contextCreator, 'reflectCallbackMetadata').returns(metadata);
-        sinon.stub(contextCreator, 'reflectCallbackParamtypes').returns([]);
+        sinon
+          .stub((contextCreator as any).contextUtils, 'reflectCallbackMetadata')
+          .returns(metadata);
+        sinon
+          .stub(
+            (contextCreator as any).contextUtils,
+            'reflectCallbackParamtypes',
+          )
+          .returns([]);
         exchangeKeysForValuesSpy = sinon.spy(
           contextCreator,
           'exchangeKeysForValues',
@@ -78,9 +91,19 @@ describe('RouterExecutionContext', () => {
       describe('returns proxy function', () => {
         let proxyContext;
         let instance;
-
+        let tryActivateStub;
         beforeEach(() => {
           instance = { foo: 'bar' };
+
+          const canActivateFn = contextCreator.createGuardsFn(
+            [1] as any,
+            null,
+            null,
+          );
+          sinon.stub(contextCreator, 'createGuardsFn').returns(canActivateFn);
+          tryActivateStub = sinon
+            .stub(guardsConsumer, 'tryActivate')
+            .callsFake(async () => true);
           proxyContext = contextCreator.create(
             instance,
             callback as any,
@@ -109,99 +132,52 @@ describe('RouterExecutionContext', () => {
             };
           });
           it('should apply expected context and arguments to callback', done => {
+            tryActivateStub.callsFake(async () => true);
             proxyContext(request, response, next).then(() => {
-              const args = [next, null, request.body.test];
+              const args = [next, undefined, request.body.test];
               expect(applySpy.called).to.be.true;
               expect(applySpy.calledWith(instance, args)).to.be.true;
               done();
             });
           });
-          it('should throw exception when "tryActivate" returns false', () => {
-            sinon.stub(guardsConsumer, 'tryActivate').callsFake(() => false);
-            expect(proxyContext(request, response, next)).to.eventually.throw();
+          it('should throw exception when "tryActivate" returns false', async () => {
+            tryActivateStub.callsFake(async () => false);
+
+            let error: HttpException;
+            try {
+              await proxyContext(request, response, next);
+            } catch (e) {
+              error = e;
+            }
+            expect(error).to.be.instanceOf(ForbiddenException);
+            expect(error.message).to.be.eql('Forbidden resource');
+            expect(error.getResponse()).to.be.eql({
+              statusCode: HttpStatus.FORBIDDEN,
+              error: 'Forbidden',
+              message: FORBIDDEN_MESSAGE,
+            });
+          });
+          it('should apply expected context when "canActivateFn" apply', () => {
+            proxyContext(request, response, next).then(() => {
+              expect(tryActivateStub.args[0][1][0]).to.equals(request);
+              expect(tryActivateStub.args[0][1][1]).to.equals(response);
+              expect(tryActivateStub.args[0][1][2]).to.equals(next);
+            });
+          });
+          it('should apply expected context when "intercept" apply', () => {
+            const interceptStub = sinon.stub(interceptorsConsumer, 'intercept');
+            proxyContext(request, response, next).then(() => {
+              expect(interceptStub.args[0][1][0]).to.equals(request);
+              expect(interceptStub.args[0][1][1]).to.equals(response);
+              expect(interceptStub.args[0][1][2]).to.equals(next);
+            });
           });
         });
       });
     });
   });
-  describe('reflectCallbackMetadata', () => {
-    const CustomDecorator = createRouteParamDecorator(() => {});
-    class TestController {
-      public callback(
-        @Request() req,
-        @Body() body,
-        @CustomDecorator() custom,
-      ) {}
-    }
-    it('should returns ROUTE_ARGS_METADATA callback metadata', () => {
-      const instance = new TestController();
-      const metadata = contextCreator.reflectCallbackMetadata(
-        instance,
-        'callback',
-      );
 
-      const expectedMetadata = {
-        [`${RouteParamtypes.REQUEST}:0`]: {
-          index: 0,
-          data: undefined,
-          pipes: [],
-        },
-        [`${RouteParamtypes.BODY}:1`]: {
-          index: 1,
-          data: undefined,
-          pipes: [],
-        },
-        [`custom${CUSTOM_ROUTE_AGRS_METADATA}:2`]: {
-          index: 2,
-          factory: () => {},
-          data: undefined,
-        },
-      };
-      expect(metadata[`${RouteParamtypes.REQUEST}:0`]).to.deep.equal(
-        expectedMetadata[`${RouteParamtypes.REQUEST}:0`],
-      );
-      expect(metadata[`${RouteParamtypes.REQUEST}:1`]).to.deep.equal(
-        expectedMetadata[`${RouteParamtypes.REQUEST}:1`],
-      );
-
-      const keys = Object.keys(metadata);
-      const custom = keys.find(key => key.includes(CUSTOM_ROUTE_AGRS_METADATA));
-
-      expect(metadata[custom]).to.be.an('object');
-      expect(metadata[custom].index).to.be.eq(2);
-      expect(metadata[custom].data).to.be.eq(undefined);
-      expect(metadata[custom].factory).to.be.a('function');
-    });
-  });
-  describe('getArgumentsLength', () => {
-    it('should returns maximum index + 1 (length) placed in array', () => {
-      const max = 4;
-      const metadata = {
-        [RouteParamtypes.REQUEST]: { index: 0 },
-        [RouteParamtypes.BODY]: {
-          index: max,
-        },
-      };
-      expect(
-        contextCreator.getArgumentsLength(Object.keys(metadata), metadata),
-      ).to.be.eq(max + 1);
-    });
-  });
-  describe('createNullArray', () => {
-    it('should create N size array filled with null', () => {
-      const size = 3;
-      expect(contextCreator.createNullArray(size)).to.be.deep.eq([
-        null,
-        null,
-        null,
-      ]);
-    });
-  });
   describe('exchangeKeysForValues', () => {
-    const res = { body: 'res' };
-    const req = { body: { test: 'req' } };
-    const next = () => {};
-
     it('should exchange arguments keys for appropriate values', () => {
       const metadata = {
         [RouteParamtypes.REQUEST]: { index: 0, data: 'test', pipes: [] },
@@ -223,41 +199,12 @@ describe('RouterExecutionContext', () => {
       expect(values[1]).to.deep.include(expectedValues[1]);
     });
   });
-  describe('getCustomFactory', () => {
-    describe('when factory is function', () => {
-      it('should return curried factory', () => {
-        const data = 3;
-        const result = 10;
-        const customFactory = (_, req) => result;
 
-        expect(
-          contextCreator.getCustomFactory(customFactory, data)(),
-        ).to.be.eql(result);
-      });
-    });
-    describe('when factory is undefined / is not a function', () => {
-      it('should return curried null identity', () => {
-        const result = 10;
-        const customFactory = undefined;
-        expect(
-          contextCreator.getCustomFactory(customFactory, undefined)(),
-        ).to.be.eql(null);
-      });
-    });
-  });
-  describe('mergeParamsMetatypes', () => {
-    it('should return "paramsProperties" when paramtypes array doesnt exists', () => {
-      const paramsProperties = ['1'];
-      expect(
-        contextCreator.mergeParamsMetatypes(paramsProperties as any, null),
-      ).to.be.eql(paramsProperties);
-    });
-  });
   describe('getParamValue', () => {
     let consumerApplySpy: sinon.SinonSpy;
     const value = 3,
       metatype = null,
-      transforms = [];
+      transforms = [{ transform: sinon.spy() }];
 
     beforeEach(() => {
       consumerApplySpy = sinon.spy(consumer, 'apply');
@@ -304,14 +251,20 @@ describe('RouterExecutionContext', () => {
         ).to.be.true;
       });
     });
-    describe('when paramtype is not query, body and param', () => {
-      it('should not call "consumer.apply"', () => {
-        contextCreator.getParamValue(
-          value,
-          { metatype, type: RouteParamtypes.NEXT, data: null },
-          transforms,
-        );
-        expect(consumerApplySpy.called).to.be.false;
+  });
+  describe('isPipeable', () => {
+    describe('when paramtype is not query, body, param and custom', () => {
+      it('should return false', () => {
+        const result = contextCreator.isPipeable(RouteParamtypes.NEXT);
+        expect(result).to.be.false;
+      });
+      it('otherwise', () => {
+        expect(contextCreator.isPipeable(RouteParamtypes.BODY)).to.be.true;
+        expect(contextCreator.isPipeable(RouteParamtypes.QUERY)).to.be.true;
+        expect(contextCreator.isPipeable(RouteParamtypes.PARAM)).to.be.true;
+        expect(contextCreator.isPipeable(RouteParamtypes.FILE)).to.be.true;
+        expect(contextCreator.isPipeable(RouteParamtypes.FILES)).to.be.true;
+        expect(contextCreator.isPipeable('custom')).to.be.true;
       });
     });
   });
@@ -324,40 +277,198 @@ describe('RouterExecutionContext', () => {
     });
   });
   describe('createGuardsFn', () => {
-    it('should throw exception when "tryActivate" returns false', () => {
+    it('should throw ForbiddenException when "tryActivate" returns false', async () => {
       const guardsFn = contextCreator.createGuardsFn([null], null, null);
-      sinon.stub(guardsConsumer, 'tryActivate').callsFake(() => false);
-      expect(guardsFn([])).to.eventually.throw();
+      sinon.stub(guardsConsumer, 'tryActivate').callsFake(async () => false);
+
+      let error: ForbiddenException;
+      try {
+        await guardsFn([]);
+      } catch (e) {
+        error = e;
+      }
+
+      expect(error).to.be.instanceOf(ForbiddenException);
+      expect(error.message).to.be.eql('Forbidden resource');
+      expect(error.getResponse()).to.be.eql({
+        statusCode: HttpStatus.FORBIDDEN,
+        message: FORBIDDEN_MESSAGE,
+        error: 'Forbidden',
+      });
     });
   });
   describe('createHandleResponseFn', () => {
     describe('when "renderTemplate" is defined', () => {
+      beforeEach(() => {
+        sinon
+          .stub(adapter, 'render')
+          .callsFake((response, view: string, options: any) => {
+            return response.render(view, options);
+          });
+      });
       it('should call "res.render()" with expected args', async () => {
         const template = 'template';
         const value = 'test';
         const response = { render: sinon.spy() };
 
-        sinon.stub(contextCreator, 'reflectResponseHeaders').returns([]);
         sinon.stub(contextCreator, 'reflectRenderTemplate').returns(template);
 
-        const handler = contextCreator.createHandleResponseFn(null, true, 100);
+        const handler = contextCreator.createHandleResponseFn(
+          null,
+          true,
+          undefined,
+          200,
+        ) as HandlerResponseBasicFn;
         await handler(value, response);
 
         expect(response.render.calledWith(template, value)).to.be.true;
       });
     });
     describe('when "renderTemplate" is undefined', () => {
-      it('should not call "res.render()"', () => {
+      it('should not call "res.render()"', async () => {
         const result = Promise.resolve('test');
         const response = { render: sinon.spy() };
 
         sinon.stub(contextCreator, 'reflectResponseHeaders').returns([]);
         sinon.stub(contextCreator, 'reflectRenderTemplate').returns(undefined);
-        
-        const handler = contextCreator.createHandleResponseFn(null, true, 100);
-        handler(result, response);
+        sinon.stub(contextCreator, 'reflectSse').returns(undefined);
+
+        const handler = contextCreator.createHandleResponseFn(
+          null,
+          true,
+          undefined,
+          200,
+        ) as HandlerResponseBasicFn;
+        await handler(result, response);
 
         expect(response.render.called).to.be.false;
+      });
+    });
+    describe('when "redirectResponse" is present', () => {
+      beforeEach(() => {
+        sinon
+          .stub(adapter, 'redirect')
+          .callsFake((response, statusCode: number, url: string) => {
+            return response.redirect(statusCode, url);
+          });
+      });
+      it('should call "res.redirect()" with expected args', async () => {
+        const redirectResponse = {
+          url: 'http://test.com',
+          statusCode: 302,
+        };
+        const response = { redirect: sinon.spy() };
+
+        const handler = contextCreator.createHandleResponseFn(
+          () => {},
+          true,
+          redirectResponse,
+          200,
+        ) as HandlerResponseBasicFn;
+        await handler(redirectResponse, response);
+
+        expect(
+          response.redirect.calledWith(
+            redirectResponse.statusCode,
+            redirectResponse.url,
+          ),
+        ).to.be.true;
+      });
+    });
+
+    describe('when "redirectResponse" is undefined', () => {
+      it('should not call "res.redirect()"', async () => {
+        const result = Promise.resolve('test');
+        const response = { redirect: sinon.spy() };
+
+        sinon.stub(contextCreator, 'reflectResponseHeaders').returns([]);
+        sinon.stub(contextCreator, 'reflectRenderTemplate').returns(undefined);
+        sinon.stub(contextCreator, 'reflectSse').returns(undefined);
+
+        const handler = contextCreator.createHandleResponseFn(
+          null,
+          true,
+          undefined,
+          200,
+        ) as HandlerResponseBasicFn;
+        await handler(result, response);
+
+        expect(response.redirect.called).to.be.false;
+      });
+    });
+
+    describe('when replying with result', () => {
+      it('should call "adapter.reply()" with expected args', async () => {
+        const result = Promise.resolve('test');
+        const response = {};
+
+        sinon.stub(contextCreator, 'reflectRenderTemplate').returns(undefined);
+        sinon.stub(contextCreator, 'reflectSse').returns(undefined);
+
+        const handler = contextCreator.createHandleResponseFn(
+          null,
+          false,
+          undefined,
+          1234,
+        ) as HandlerResponseBasicFn;
+        const adapterReplySpy = sinon.spy(adapter, 'reply');
+        await handler(result, response);
+        expect(
+          adapterReplySpy.calledOnceWithExactly(
+            sinon.match.same(response),
+            'test',
+            1234,
+          ),
+        ).to.be.true;
+      });
+    });
+
+    describe('when "isSse" is enabled', () => {
+      it('should delegate result to SseStream', async () => {
+        const result = of('test');
+        const response = new PassThrough();
+        response.write = sinon.spy();
+
+        const request = new PassThrough();
+        request.on = sinon.spy();
+
+        sinon.stub(contextCreator, 'reflectRenderTemplate').returns(undefined);
+        sinon.stub(contextCreator, 'reflectSse').returns('/');
+
+        const handler = contextCreator.createHandleResponseFn(
+          null,
+          true,
+          undefined,
+          200,
+        ) as HandlerResponseBasicFn;
+        await handler(result, response, request);
+
+        expect((response.write as any).called).to.be.true;
+        expect((request.on as any).called).to.be.true;
+      });
+
+      it('should not allow a non-observable result', async () => {
+        const result = Promise.resolve('test');
+        const response = new PassThrough();
+        const request = new PassThrough();
+
+        sinon.stub(contextCreator, 'reflectRenderTemplate').returns(undefined);
+        sinon.stub(contextCreator, 'reflectSse').returns('/');
+
+        const handler = contextCreator.createHandleResponseFn(
+          null,
+          true,
+          undefined,
+          200,
+        ) as HandlerResponseBasicFn;
+
+        try {
+          await handler(result, response, request);
+        } catch (e) {
+          expect(e.message).to.equal(
+            'You must return an Observable stream to use Server-Sent Events (SSE).',
+          );
+        }
       });
     });
   });

@@ -1,16 +1,31 @@
-import { Controller, Get, Post, Body, Query, HttpCode } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpCode,
+  Inject,
+  Post,
+  Query,
+} from '@nestjs/common';
 import {
   Client,
-  MessagePattern,
   ClientProxy,
+  EventPattern,
+  MessagePattern,
   Transport,
-  ClientProxyFactory,
+  RpcException,
 } from '@nestjs/microservices';
-import { Observable, of, from } from 'rxjs';
-import { scan, tap } from 'rxjs/operators';
+import { from, Observable, of, throwError } from 'rxjs';
+import { catchError, scan } from 'rxjs/operators';
 
 @Controller()
 export class AppController {
+  constructor(
+    @Inject('USE_CLASS_CLIENT') private useClassClient: ClientProxy,
+    @Inject('USE_FACTORY_CLIENT') private useFactoryClient: ClientProxy,
+    @Inject('CUSTOM_PROXY_CLIENT') private customClient: ClientProxy,
+  ) {}
+  static IS_NOTIFIED = false;
+
   @Client({ transport: Transport.TCP })
   client: ClientProxy;
 
@@ -18,6 +33,24 @@ export class AppController {
   @HttpCode(200)
   call(@Query('command') cmd, @Body() data: number[]): Observable<number> {
     return this.client.send<number>({ cmd }, data);
+  }
+
+  @Post('useFactory')
+  @HttpCode(200)
+  callWithClientUseFactory(
+    @Query('command') cmd,
+    @Body() data: number[],
+  ): Observable<number> {
+    return this.useFactoryClient.send<number>({ cmd }, data);
+  }
+
+  @Post('useClass')
+  @HttpCode(200)
+  callWithClientUseClass(
+    @Query('command') cmd,
+    @Body() data: number[],
+  ): Observable<number> {
+    return this.useClassClient.send<number>({ cmd }, data);
   }
 
   @Post('stream')
@@ -40,8 +73,19 @@ export class AppController {
       return result === expected;
     };
     return data
-      .map(async tab => await send(tab))
-      .reduce(async (a, b) => (await a) && (await b));
+      .map(async tab => send(tab))
+      .reduce(async (a, b) => (await a) && b);
+  }
+
+  @Post('error')
+  @HttpCode(200)
+  serializeError(@Query('client') query: 'custom' | 'standard' = 'standard', @Body() body: Record<string, any>): Observable<boolean> {
+    const client = query === 'custom' ? this.customClient : this.client;
+    return client.send({ cmd: 'err' }, {}).pipe(
+      catchError((err) => {
+        return of(err instanceof RpcException);
+      })
+    )
   }
 
   @MessagePattern({ cmd: 'sum' })
@@ -62,5 +106,20 @@ export class AppController {
   @MessagePattern({ cmd: 'streaming' })
   streaming(data: number[]): Observable<number> {
     return from(data);
+  }
+
+  @MessagePattern({ cmd: 'err' })
+  throwAnError() {
+    return throwError(new Error('err'));
+  }
+
+  @Post('notify')
+  async sendNotification(): Promise<any> {
+    return this.client.emit<number>('notification', true);
+  }
+
+  @EventPattern('notification')
+  eventHandler(data: boolean) {
+    AppController.IS_NOTIFIED = data;
   }
 }

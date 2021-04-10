@@ -1,10 +1,26 @@
 /**
  * Options passed to validator during validation.
  * @see https://github.com/typestack/class-validator
+ *
+ * class-validator@0.13.0
+ *
+ * @publicApi
  */
 export interface ValidatorOptions {
   /**
-   * If set to true than validator will skip validation of all properties that are missing in the validating object.
+   * If set to true then class-validator will print extra warning messages to the console when something is not right.
+   */
+  enableDebugMessages?: boolean;
+  /**
+   * If set to true then validator will skip validation of all properties that are undefined in the validating object.
+   */
+  skipUndefinedProperties?: boolean;
+  /**
+   * If set to true then validator will skip validation of all properties that are null in the validating object.
+   */
+  skipNullProperties?: boolean;
+  /**
+   * If set to true then validator will skip validation of all properties that are null or undefined in the validating object.
    */
   skipMissingProperties?: boolean;
   /**
@@ -22,6 +38,15 @@ export interface ValidatorOptions {
    */
   groups?: string[];
   /**
+   * Set default for `always` option of decorators. Default can be overridden in decorator options.
+   */
+  always?: boolean;
+  /**
+   * If [groups]{@link ValidatorOptions#groups} is not given or is empty,
+   * ignore decorators with at least one group.
+   */
+  strictGroups?: boolean;
+  /**
    * If set to true, the validation will not use default messages.
    * Error message always will be undefined if its not explicitly set.
    */
@@ -30,17 +55,21 @@ export interface ValidatorOptions {
    * ValidationError special options.
    */
   validationError?: {
-      /**
-       * Indicates if target should be exposed in ValidationError.
-       */
-      target?: boolean;
-      /**
-       * Indicates if validated value should be exposed in ValidationError.
-       */
-      value?: boolean;
+    /**
+     * Indicates if target should be exposed in ValidationError.
+     */
+    target?: boolean;
+    /**
+     * Indicates if validated value should be exposed in ValidationError.
+     */
+    value?: boolean;
   };
   /**
    * Settings true will cause fail validation of unknown objects.
    */
   forbidUnknownValues?: boolean;
+  /**
+   * When set to true, validation of the given property will stop after encountering the first error. Defaults to false.
+   */
+  stopAtFirstError?: boolean;
 }

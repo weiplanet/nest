@@ -1,88 +1,47 @@
-import { Logger, WebSocketAdapter } from '@nestjs/common';
-import { loadPackage } from '@nestjs/common/utils/load-package.util';
+import { INestApplicationContext, WebSocketAdapter } from '@nestjs/common';
+import { WsMessageHandler } from '@nestjs/common/interfaces';
 import { isFunction } from '@nestjs/common/utils/shared.utils';
-import { Server } from 'http';
-import { EMPTY as empty, Observable, fromEvent } from 'rxjs';
-import { filter, mergeMap } from 'rxjs/operators';
-import { CLOSE_EVENT, CONNECTION_EVENT, ERROR_EVENT } from '../constants';
-import { MessageMappingProperties } from '../gateway-metadata-explorer';
+import { NestApplication } from '@nestjs/core';
+import { Observable } from 'rxjs';
+import { CONNECTION_EVENT, DISCONNECT_EVENT } from '../constants';
 
-let wsPackage: any = {};
+export interface BaseWsInstance {
+  on: (event: string, callback: Function) => void;
+  close: Function;
+}
 
-export class WsAdapter implements WebSocketAdapter {
-  private readonly logger = new Logger(WsAdapter.name);
-  constructor(private readonly httpServer: Server | null = null) {
-    wsPackage = loadPackage('ws', 'WsAdapter');
-  }
+export abstract class AbstractWsAdapter<
+  TServer extends BaseWsInstance = any,
+  TClient extends BaseWsInstance = any,
+  TOptions = any
+> implements WebSocketAdapter<TServer, TClient, TOptions> {
+  protected readonly httpServer: any;
 
-  public create(
-    port: number,
-    options?: any & { namespace?: string; server?: any },
-  ): any {
-    const { server, ...wsOptions } = options;
-    if (port === 0 && this.httpServer) {
-      return this.bindErrorHandler(
-        new wsPackage.Server({
-          server: this.httpServer,
-          ...wsOptions,
-        }),
-      );
+  constructor(appOrHttpServer?: INestApplicationContext | any) {
+    if (appOrHttpServer && appOrHttpServer instanceof NestApplication) {
+      this.httpServer = appOrHttpServer.getUnderlyingHttpServer();
+    } else {
+      this.httpServer = appOrHttpServer;
     }
-    return server
-      ? server
-      : this.bindErrorHandler(
-          new wsPackage.Server({
-            port,
-            ...wsOptions,
-          }),
-        );
   }
 
-  public bindClientConnect(server, callback: (...args) => void) {
+  public bindClientConnect(server: TServer, callback: Function) {
     server.on(CONNECTION_EVENT, callback);
   }
 
-  public bindClientDisconnect(client, callback: (...args) => void) {
-    client.on(CLOSE_EVENT, callback);
+  public bindClientDisconnect(client: TClient, callback: Function) {
+    client.on(DISCONNECT_EVENT, callback);
   }
 
-  public bindMessageHandlers(
-    client: WebSocket,
-    handlers: MessageMappingProperties[],
+  public close(server: TServer) {
+    const isCallable = server && isFunction(server.close);
+    isCallable && server.close();
+  }
+
+  public abstract create(port: number, options?: TOptions): TServer;
+  public abstract bindMessageHandlers(
+    client: TClient,
+    handlers: WsMessageHandler[],
     transform: (data: any) => Observable<any>,
-  ) {
-    fromEvent(client, 'message')
-      .pipe(
-        mergeMap(data => this.bindMessageHandler(data, handlers, transform)),
-        filter(result => !!result),
-      )
-      .subscribe(response => client.send(JSON.stringify(response)));
-  }
-
-  public bindMessageHandler(
-    buffer,
-    handlers: MessageMappingProperties[],
-    transform: (data: any) => Observable<any>,
-  ): Observable<any> {
-    try {
-      const message = JSON.parse(buffer.data);
-      const messageHandler = handlers.find(
-        handler => handler.message === message.event,
-      );
-      const { callback } = messageHandler;
-      return transform(callback(message.data));
-    }
-    catch {
-      return empty;
-    }
-  }
-
-  public close(server) {
-    isFunction(server.close) && server.close();
-  }
-
-  public bindErrorHandler(server) {
-    server.on(ERROR_EVENT, err => this.logger.error(err));
-    return server;
-  }
+  );
 }

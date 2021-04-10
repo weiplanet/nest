@@ -1,21 +1,20 @@
-import { Type, DynamicModule } from '@nestjs/common/interfaces';
+import { DynamicModule, Type } from '@nestjs/common/interfaces';
 import { ModuleTokenFactory } from './module-token-factory';
 
 export interface ModuleFactory {
   type: Type<any>;
   token: string;
-  dynamicMetadata?: Partial<DynamicModule> | undefined;
+  dynamicMetadata?: Partial<DynamicModule>;
 }
 
 export class ModuleCompiler {
-  private readonly moduleTokenFactory = new ModuleTokenFactory();
+  constructor(private readonly moduleTokenFactory = new ModuleTokenFactory()) {}
 
-  public compile(
-    metatype: Type<any> | DynamicModule,
-    scope: Type<any>[],
-  ): ModuleFactory {
-    const { type, dynamicMetadata } = this.extractMetadata(metatype);
-    const token = this.moduleTokenFactory.create(type, scope, dynamicMetadata);
+  public async compile(
+    metatype: Type<any> | DynamicModule | Promise<DynamicModule>,
+  ): Promise<ModuleFactory> {
+    const { type, dynamicMetadata } = this.extractMetadata(await metatype);
+    const token = this.moduleTokenFactory.create(type, dynamicMetadata);
     return { type, dynamicMetadata, token };
   }
 

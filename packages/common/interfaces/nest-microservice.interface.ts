@@ -1,18 +1,23 @@
-import { WebSocketAdapter } from './websockets/web-socket-adapter.interface';
 import { ExceptionFilter } from './exceptions/exception-filter.interface';
-import { PipeTransform } from './features/pipe-transform.interface';
-import { NestInterceptor } from './features/nest-interceptor.interface';
 import { CanActivate } from './features/can-activate.interface';
+import { NestInterceptor } from './features/nest-interceptor.interface';
+import { PipeTransform } from './features/pipe-transform.interface';
 import { INestApplicationContext } from './nest-application-context.interface';
+import { WebSocketAdapter } from './websockets/web-socket-adapter.interface';
 
+/**
+ * Interface describing Microservice Context.
+ *
+ * @publicApi
+ */
 export interface INestMicroservice extends INestApplicationContext {
   /**
    * Starts the microservice.
    *
-   * @param  {Function} callback
-   * @returns {Promise}
+   * @param {Function} callback
+   * @returns {void}
    */
-  listen(callback: () => void);
+  listen(callback: () => void): void;
 
   /**
    * Starts the microservice (can be awaited).
@@ -23,38 +28,38 @@ export interface INestMicroservice extends INestApplicationContext {
 
   /**
    * Register Ws Adapter which will be used inside Gateways.
-   * Use, when you want to override default `socket.io` library.
+   * Use when you want to override default `socket.io` library.
    *
-   * @param  {WebSocketAdapter} adapter
-   * @returns {void}
+   * @param {WebSocketAdapter} adapter
+   * @returns {this}
    */
   useWebSocketAdapter(adapter: WebSocketAdapter): this;
 
   /**
-   * Registers exception filters as a global filters (will be used within every message pattern handler)
+   * Registers exception filters as global filters (will be used within every message pattern handler)
    *
-   * @param  {ExceptionFilter[]} ...filters
+   * @param {...ExceptionFilter} filters
    */
   useGlobalFilters(...filters: ExceptionFilter[]): this;
 
   /**
-   * Registers pipes as a global pipes (will be used within every message pattern handler)
+   * Registers pipes as global pipes (will be used within every message pattern handler)
    *
-   * @param  {PipeTransform[]} ...pipes
+   * @param {...PipeTransform} pipes
    */
   useGlobalPipes(...pipes: PipeTransform<any>[]): this;
 
   /**
-   * Registers interceptors as a global interceptors (will be used within every message pattern handler)
+   * Registers interceptors as global interceptors (will be used within every message pattern handler)
    *
-   * @param  {NestInterceptor[]} ...interceptors
+   * @param {...NestInterceptor} interceptors
    */
   useGlobalInterceptors(...interceptors: NestInterceptor[]): this;
 
   /**
-   * Registers guards as a global guards (will be used within every message pattern handler)
+   * Registers guards as global guards (will be used within every message pattern handler)
    *
-   * @param  {CanActivate[]} ...guards
+   * @param {...CanActivate} guards
    */
   useGlobalGuards(...guards: CanActivate[]): this;
 

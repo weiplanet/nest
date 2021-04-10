@@ -1,7 +1,6 @@
-import 'reflect-metadata';
 import { expect } from 'chai';
-import { UseGuards } from '../../decorators/core/use-guards.decorator';
 import { GUARDS_METADATA } from '../../constants';
+import { UseGuards } from '../../decorators/core/use-guards.decorator';
 import { InvalidDecoratorItemException } from '../../utils/validate-each.util';
 
 class Guard {}
@@ -9,17 +8,17 @@ class Guard {}
 describe('@UseGuards', () => {
   const guards = [Guard, Guard];
 
-  @UseGuards(...(guards as any))
+  @UseGuards(...guards)
   class Test {}
 
   class TestWithMethod {
-    @UseGuards(...(guards as any))
+    @UseGuards(...guards)
     public static test() {}
   }
 
   class Test2 {
-    @UseGuards(...(guards as any))
-    @UseGuards(...(guards as any))
+    @UseGuards(...guards)
+    @UseGuards(...guards)
     public static test() {}
   }
 
@@ -33,14 +32,14 @@ describe('@UseGuards', () => {
     expect(metadata).to.be.eql(guards);
   });
 
-  it('should enhance class with multiple guards array', () => {
+  it('should enhance method with multiple guards array', () => {
     const metadata = Reflect.getMetadata(GUARDS_METADATA, Test2.test);
     expect(metadata).to.be.eql(guards.concat(guards));
   });
 
-  it('when object is invalid should throw exception', () => {
+  it('should throw exception when object is invalid', () => {
     try {
-      UseGuards('test' as any)({});
+      UseGuards('test' as any)(() => {});
     } catch (e) {
       expect(e).to.be.instanceof(InvalidDecoratorItemException);
     }

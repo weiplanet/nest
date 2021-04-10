@@ -1,7 +1,7 @@
-import * as sinon from 'sinon';
 import { expect } from 'chai';
-import { Server } from '../../server/server';
 import { Observable, of, throwError as _throw } from 'rxjs';
+import * as sinon from 'sinon';
+import { Server } from '../../server/server';
 
 class TestServer extends Server {
   public listen(callback: () => void) {}
@@ -10,17 +10,76 @@ class TestServer extends Server {
 
 describe('Server', () => {
   const server = new TestServer();
+  const sandbox = sinon.createSandbox();
   const callback = () => {},
-    pattern = { test: 'test' };
+    pattern = { test: 'test pattern' };
 
-  describe('add', () => {
-    it(`should add handler as a stringified pattern key`, () => {
+  afterEach(() => {
+    sandbox.restore();
+  });
+
+  describe('addHandler', () => {
+    it(`should add handler`, () => {
+      const handlerRoute = 'hello';
+      sandbox.stub(server as any, 'messageHandlers').value({ set() {} });
+
+      const messageHandlersSetSpy = sinon.spy(
+        (server as any).messageHandlers,
+        'set',
+      );
+      const normalizePatternStub = sinon
+        .stub(server as any, 'normalizePattern')
+        .returns(handlerRoute);
+
       server.addHandler(pattern, callback as any);
 
-      const handlers = server.getHandlers();
-      expect(handlers[JSON.stringify(pattern)]).to.equal(callback);
+      expect(messageHandlersSetSpy.called).to.be.true;
+      expect(messageHandlersSetSpy.args[0][0]).to.be.equal(handlerRoute);
+      expect(messageHandlersSetSpy.args[0][1]).to.be.equal(callback);
+
+      normalizePatternStub.restore();
     });
   });
+
+  describe('getRouteFromPattern', () => {
+    let normalizePatternStub: sinon.SinonStub;
+
+    beforeEach(() => {
+      normalizePatternStub = sinon.stub(server as any, 'normalizePattern');
+    });
+
+    afterEach(() => {
+      normalizePatternStub.restore();
+    });
+
+    describe(`when gets 'string' pattern`, () => {
+      it(`should call 'transformPatternToRoute' with 'string' argument`, () => {
+        const inputServerPattern = 'hello';
+        const transformedServerPattern = inputServerPattern;
+        (server as any).getRouteFromPattern(inputServerPattern);
+
+        expect(normalizePatternStub.args[0][0]).to.be.equal(
+          transformedServerPattern,
+        );
+      });
+    });
+
+    describe(`when gets 'json' pattern as 'string'`, () => {
+      it(`should call 'transformPatternToRoute' with 'json' argument`, () => {
+        const inputServerPattern = '{"controller":"app","use":"getHello"}';
+        const transformedServerPattern = {
+          controller: 'app',
+          use: 'getHello',
+        };
+        (server as any).getRouteFromPattern(inputServerPattern);
+
+        expect(normalizePatternStub.args[0][0]).to.be.deep.equal(
+          transformedServerPattern,
+        );
+      });
+    });
+  });
+
   describe('send', () => {
     let stream$: Observable<string>;
     let sendSpy: sinon.SinonSpy;
@@ -35,30 +94,36 @@ describe('Server', () => {
         beforeEach(() => {
           server.send(_throw('test') as any, sendSpy);
         });
-        it('should send error', () => {
-          expect(sendSpy.calledWith({ err: 'test', response: null })).to.be
-            .true;
-        });
-        it('should send "complete" event', () => {
-          expect(sendSpy.calledWith({ isDisposed: true })).to.be.true;
+        it('should send error and complete', () => {
+          process.nextTick(() => {
+            expect(
+              sendSpy.calledWith({
+                err: 'test',
+                isDisposed: true,
+              }),
+            ).to.be.true;
+          });
         });
       });
       describe('emits response', () => {
         beforeEach(() => {
           server.send(stream$, sendSpy);
         });
-        it('should send response', () => {
-          expect(sendSpy.calledWith({ err: null, response: 'test' })).to.be
-            .true;
-        });
-        it('should send "complete" event', () => {
-          expect(sendSpy.calledWith({ isDisposed: true })).to.be.true;
+        it('should send response and "complete" event', () => {
+          process.nextTick(() => {
+            expect(
+              sendSpy.calledWith({
+                response: 'test',
+                isDisposed: true,
+              }),
+            ).to.be.true;
+          });
         });
       });
     });
   });
   describe('transformToObservable', () => {
-    describe('when resultOrDeffered', () => {
+    describe('when resultOrDeferred', () => {
       describe('is Promise', () => {
         it('should returns Observable', async () => {
           const value = 100;
@@ -73,9 +138,7 @@ describe('Server', () => {
         it('should returns Observable', async () => {
           const value = 100;
           expect(
-            await server
-              .transformToObservable(of(value))
-              .toPromise(),
+            await server.transformToObservable(of(value)).toPromise(),
           ).to.be.eq(100);
         });
       });
@@ -89,20 +152,54 @@ describe('Server', () => {
       });
     });
   });
+
   describe('getHandlerByPattern', () => {
+    let messageHandlersGetSpy: sinon.SinonStub;
+    let messageHandlersHasSpy: sinon.SinonStub;
+    const handlerRoute = 'hello';
+
+    beforeEach(() => {
+      sandbox
+        .stub(server as any, 'messageHandlers')
+        .value({ get() {}, has() {} });
+      messageHandlersGetSpy = sinon
+        .stub((server as any).messageHandlers, 'get')
+        .returns(callback);
+      messageHandlersHasSpy = sinon.stub(
+        (server as any).messageHandlers,
+        'has',
+      );
+
+      sandbox.stub(server as any, 'getRouteFromPattern').returns(handlerRoute);
+    });
+
+    afterEach(() => {
+      messageHandlersGetSpy.restore();
+      messageHandlersHasSpy.restore();
+    });
+
     describe('when handler exists', () => {
       it('should return expected handler', () => {
-        const pattern = 'pattern';
-        const expectedResult = {};
-        (server as any).messageHandlers[pattern] = expectedResult;
-        expect(server.getHandlerByPattern(pattern)).to.be.eql(expectedResult);
+        messageHandlersHasSpy.returns(true);
+
+        const value = server.getHandlerByPattern(handlerRoute);
+
+        expect(messageHandlersHasSpy.args[0][0]).to.be.equal(handlerRoute);
+        expect(messageHandlersGetSpy.called).to.be.true;
+        expect(messageHandlersGetSpy.args[0][0]).to.be.equal(handlerRoute);
+        expect(value).to.be.equal(callback);
       });
     });
+
     describe('when handler does not exists', () => {
       it('should return null', () => {
-        const pattern = 'test';
-        const expectedResult = null;
-        expect(server.getHandlerByPattern(pattern)).to.be.eql(null);
+        messageHandlersHasSpy.returns(false);
+
+        const value = server.getHandlerByPattern(handlerRoute);
+
+        expect(messageHandlersHasSpy.args[0][0]).to.be.equal(handlerRoute);
+        expect(messageHandlersGetSpy.called).to.be.false;
+        expect(value).to.be.null;
       });
     });
   });

@@ -1,11 +1,12 @@
 import { NestFactory } from '@nestjs/core';
-import { ApplicationModule } from './app.module';
+import { AppModule } from './app.module';
 
 declare const module: any;
 
 async function bootstrap() {
-  const app = await NestFactory.create(ApplicationModule);
+  const app = await NestFactory.create(AppModule);
   await app.listen(3000);
+  console.log(`Application is running on: ${await app.getUrl()}`);
 
   if (module.hot) {
     module.hot.accept();

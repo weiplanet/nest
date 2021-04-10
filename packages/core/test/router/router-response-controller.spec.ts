@@ -1,16 +1,20 @@
-import * as sinon from 'sinon';
+import { isNil, isObject } from '@nestjs/common/utils/shared.utils';
 import { expect } from 'chai';
+import { IncomingMessage, ServerResponse } from 'http';
+import { of } from 'rxjs';
+import * as sinon from 'sinon';
+import { PassThrough, Writable } from 'stream';
+import { HttpStatus, RequestMethod } from '../../../common';
 import { RouterResponseController } from '../../router/router-response-controller';
-import { RequestMethod } from './../../../common';
-import { Observable, of } from 'rxjs';
-import { ExpressAdapter } from '../../adapters/express-adapter';
+import { NoopHttpAdapter } from '../utils/noop-adapter.spec';
 
 describe('RouterResponseController', () => {
+  let adapter: NoopHttpAdapter;
   let routerResponseController: RouterResponseController;
-  let handlerMock: sinon.SinonMock;
 
   beforeEach(() => {
-    routerResponseController = new RouterResponseController(new ExpressAdapter({}));
+    adapter = new NoopHttpAdapter({});
+    routerResponseController = new RouterResponseController(adapter);
   });
 
   describe('apply', () => {
@@ -20,10 +24,24 @@ describe('RouterResponseController', () => {
       json: sinon.SinonSpy;
     };
     beforeEach(() => {
-      response = { send: sinon.spy(), json: sinon.spy() };
-      response.status = sinon.stub().returns(response);
+      response = { send: sinon.spy(), json: sinon.spy(), status: sinon.spy() };
     });
     describe('when result is', () => {
+      beforeEach(() => {
+        sinon
+          .stub(adapter, 'reply')
+          .callsFake((responseRef: any, body: any, statusCode?: number) => {
+            if (statusCode) {
+              responseRef.status(statusCode);
+            }
+            if (isNil(body)) {
+              return responseRef.send();
+            }
+            return isObject(body)
+              ? responseRef.json(body)
+              : responseRef.send(String(body));
+          });
+      });
       describe('nil', () => {
         it('should call send()', async () => {
           const value = null;
@@ -64,11 +82,11 @@ describe('RouterResponseController', () => {
       });
 
       describe('is Observable', () => {
-        it('should returns Promise', async () => {
-          const value = 100;
+        it('should returns toPromise', async () => {
+          const lastValue = 100;
           expect(
             await routerResponseController.transformToResult(
-              of(value),
+              of(1, 2, 3, lastValue),
             ),
           ).to.be.eq(100);
         });
@@ -103,6 +121,13 @@ describe('RouterResponseController', () => {
   });
 
   describe('render', () => {
+    beforeEach(() => {
+      sinon
+        .stub(adapter, 'render')
+        .callsFake((response, view: string, options: any) => {
+          return response.render(view, options);
+        });
+    });
     it('should call "res.render()" with expected args', async () => {
       const template = 'template';
       const value = 'test';
@@ -111,6 +136,192 @@ describe('RouterResponseController', () => {
 
       await routerResponseController.render(result, response, template);
       expect(response.render.calledWith(template, value)).to.be.true;
+    });
+  });
+
+  describe('setHeaders', () => {
+    let setHeaderStub: sinon.SinonStub;
+
+    beforeEach(() => {
+      setHeaderStub = sinon.stub(adapter, 'setHeader').callsFake(() => ({}));
+    });
+
+    it('should set all custom headers', () => {
+      const response = {};
+      const headers = [{ name: 'test', value: 'test_value' }];
+
+      routerResponseController.setHeaders(response, headers);
+      expect(
+        setHeaderStub.calledWith(response, headers[0].name, headers[0].value),
+      ).to.be.true;
+    });
+  });
+
+  describe('status', () => {
+    let statusStub: sinon.SinonStub;
+
+    beforeEach(() => {
+      statusStub = sinon.stub(adapter, 'status').callsFake(() => ({}));
+    });
+
+    it('should set status', () => {
+      const response = {};
+      const statusCode = 400;
+
+      routerResponseController.setStatus(response, statusCode);
+      expect(statusStub.calledWith(response, statusCode)).to.be.true;
+    });
+  });
+
+  describe('redirect should HttpServer.redirect', () => {
+    it('should transformToResult', async () => {
+      const transformToResultSpy = sinon
+        .stub(routerResponseController, 'transformToResult')
+        .returns(Promise.resolve({ statusCode: 123, url: 'redirect url' }));
+      const result = {};
+      await routerResponseController.redirect(result, null, null);
+      expect(transformToResultSpy.firstCall.args[0]).to.be.equal(result);
+    });
+    it('should pass the response to redirect', async () => {
+      sinon
+        .stub(routerResponseController, 'transformToResult')
+        .returns(Promise.resolve({ statusCode: 123, url: 'redirect url' }));
+      const redirectSpy = sinon.spy(adapter, 'redirect');
+      const response = {};
+      await routerResponseController.redirect(null, response, null);
+      expect(redirectSpy.firstCall.args[0]).to.be.equal(response);
+    });
+    describe('status code', () => {
+      it('should come from the transformed result if present', async () => {
+        sinon
+          .stub(routerResponseController, 'transformToResult')
+          .returns(Promise.resolve({ statusCode: 123, url: 'redirect url' }));
+        const redirectSpy = sinon.spy(adapter, 'redirect');
+        await routerResponseController.redirect(null, null, {
+          statusCode: 999,
+          url: 'not form here',
+        });
+        expect(redirectSpy.firstCall.args[1]).to.be.eql(123);
+      });
+      it('should come from the redirectResponse if not on the transformed result', async () => {
+        sinon
+          .stub(routerResponseController, 'transformToResult')
+          .returns(Promise.resolve({}));
+        const redirectSpy = sinon.spy(adapter, 'redirect');
+        await routerResponseController.redirect(null, null, {
+          statusCode: 123,
+          url: 'redirect url',
+        });
+        expect(redirectSpy.firstCall.args[1]).to.be.eql(123);
+      });
+      it('should default to HttpStatus.FOUND', async () => {
+        sinon
+          .stub(routerResponseController, 'transformToResult')
+          .returns(Promise.resolve({}));
+        const redirectSpy = sinon.spy(adapter, 'redirect');
+        await routerResponseController.redirect(null, null, {
+          url: 'redirect url',
+        });
+        expect(redirectSpy.firstCall.args[1]).to.be.eql(HttpStatus.FOUND);
+      });
+    });
+    describe('url', () => {
+      it('should come from the transformed result if present', async () => {
+        sinon
+          .stub(routerResponseController, 'transformToResult')
+          .returns(Promise.resolve({ statusCode: 123, url: 'redirect url' }));
+        const redirectSpy = sinon.spy(adapter, 'redirect');
+        await routerResponseController.redirect(null, null, {
+          url: 'not from here',
+        });
+        expect(redirectSpy.firstCall.args[2]).to.be.eql('redirect url');
+      });
+      it('should come from the redirectResponse if not on the transformed result', async () => {
+        sinon
+          .stub(routerResponseController, 'transformToResult')
+          .returns(Promise.resolve({}));
+        const redirectSpy = sinon.spy(adapter, 'redirect');
+        await routerResponseController.redirect(null, null, {
+          statusCode: 123,
+          url: 'redirect url',
+        });
+        expect(redirectSpy.firstCall.args[2]).to.be.eql('redirect url');
+      });
+    });
+  });
+  describe('Server-Sent-Events', () => {
+    it('should accept only observables', async () => {
+      const result = Promise.resolve('test');
+      try {
+        await routerResponseController.sse(
+          (result as unknown) as any,
+          ({} as unknown) as ServerResponse,
+          ({} as unknown) as IncomingMessage,
+        );
+      } catch (e) {
+        expect(e.message).to.eql(
+          'You must return an Observable stream to use Server-Sent Events (SSE).',
+        );
+      }
+    });
+
+    it('should write string', async () => {
+      class Sink extends Writable {
+        private readonly chunks: string[] = [];
+
+        _write(
+          chunk: any,
+          encoding: string,
+          callback: (error?: Error | null) => void,
+        ): void {
+          this.chunks.push(chunk);
+          callback();
+        }
+
+        get content() {
+          return this.chunks.join('');
+        }
+      }
+
+      const written = (stream: Writable) =>
+        new Promise((resolve, reject) =>
+          stream.on('error', reject).on('finish', resolve),
+        );
+
+      const result = of('test');
+      const response = new Sink();
+      const request = new PassThrough();
+      routerResponseController.sse(
+        result,
+        (response as unknown) as ServerResponse,
+        (request as unknown) as IncomingMessage,
+      );
+      request.destroy();
+      await written(response);
+      expect(response.content).to.eql(
+        `:
+id: 1
+data: test
+
+`,
+      );
+    });
+
+    it('should close on request close', done => {
+      const result = of('test');
+      const response = new Writable();
+      response.end = () => done();
+      response._write = () => {};
+
+      const request = new Writable();
+      request._write = () => {};
+
+      routerResponseController.sse(
+        result,
+        (response as unknown) as ServerResponse,
+        (request as unknown) as IncomingMessage,
+      );
+      request.emit('close');
     });
   });
 });

@@ -1,19 +1,41 @@
+import { isFunction } from '@nestjs/common/utils/shared.utils';
+import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-host';
 import { Observable } from 'rxjs';
+import { catchError } from 'rxjs/operators';
 import { RpcExceptionsHandler } from '../exceptions/rpc-exceptions-handler';
-import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context.host';
 
 export class RpcProxy {
   public create(
-    targetCallback: (...args) => Promise<Observable<any>>,
+    targetCallback: (...args: unknown[]) => Promise<Observable<any>>,
     exceptionsHandler: RpcExceptionsHandler,
-  ): (...args) => Promise<Observable<any>> {
-    return async (...args) => {
-      const host = new ExecutionContextHost(args);
+  ): (...args: unknown[]) => Promise<Observable<unknown>> {
+    return async (...args: unknown[]) => {
       try {
-        return await targetCallback(...args);
-      } catch (e) {
-        return exceptionsHandler.handle(e, host);
+        const result = await targetCallback(...args);
+        return !this.isObservable(result)
+          ? result
+          : result.pipe(
+              catchError(error =>
+                this.handleError(exceptionsHandler, args, error),
+              ),
+            );
+      } catch (error) {
+        return this.handleError(exceptionsHandler, args, error);
       }
     };
+  }
+
+  handleError<T>(
+    exceptionsHandler: RpcExceptionsHandler,
+    args: unknown[],
+    error: T,
+  ): Observable<unknown> {
+    const host = new ExecutionContextHost(args);
+    host.setType('rpc');
+    return exceptionsHandler.handle(error, host);
+  }
+
+  isObservable(result: any): boolean {
+    return result && isFunction(result.subscribe);
   }
 }

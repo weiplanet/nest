@@ -1,11 +1,15 @@
-import * as sinon from 'sinon';
 import { expect } from 'chai';
-import { NO_PATTERN_MESSAGE } from '../../constants';
+import * as sinon from 'sinon';
+import { NO_MESSAGE_HANDLER } from '../../constants';
+import { BaseRpcContext } from '../../ctx-host/base-rpc.context';
 import { ServerMqtt } from '../../server/server-mqtt';
-import { Observable } from 'rxjs';
 
 describe('ServerMqtt', () => {
   let server: ServerMqtt;
+
+  const objectToMap = obj =>
+    new Map(Object.keys(obj).map(key => [key, obj[key]]) as any);
+
   beforeEach(() => {
     server = new ServerMqtt({});
   });
@@ -56,16 +60,14 @@ describe('ServerMqtt', () => {
         subscribe: subscribeSpy,
       };
     });
-    it('should subscribe each acknowledge patterns', () => {
+    it('should subscribe to each pattern', () => {
       const pattern = 'test';
       const handler = sinon.spy();
-      (server as any).messageHandlers = {
+      (server as any).messageHandlers = objectToMap({
         [pattern]: handler,
-      };
+      });
       server.bindEvents(mqttClient);
-
-      const expectedPattern = 'test_ack';
-      expect(subscribeSpy.calledWith(expectedPattern)).to.be.true;
+      expect(subscribeSpy.calledWith(pattern)).to.be.true;
     });
   });
   describe('getMessageHandler', () => {
@@ -95,7 +97,16 @@ describe('ServerMqtt', () => {
       getPublisherSpy = sinon.spy();
       sinon.stub(server, 'getPublisher').callsFake(() => getPublisherSpy);
     });
-    it(`should publish NO_PATTERN_MESSAGE if pattern not exists in messageHandlers object`, () => {
+    it('should call "handleEvent" if identifier is not present', () => {
+      const handleEventSpy = sinon.spy(server, 'handleEvent');
+      server.handleMessage(
+        channel,
+        new Buffer(JSON.stringify({ pattern: '', data })),
+        null,
+      );
+      expect(handleEventSpy.called).to.be.true;
+    });
+    it(`should publish NO_MESSAGE_HANDLER if pattern not exists in messageHandlers object`, () => {
       server.handleMessage(
         channel,
         new Buffer(JSON.stringify({ id, pattern: '', data })),
@@ -105,15 +116,15 @@ describe('ServerMqtt', () => {
         getPublisherSpy.calledWith({
           id,
           status: 'error',
-          err: NO_PATTERN_MESSAGE,
+          err: NO_MESSAGE_HANDLER,
         }),
       ).to.be.true;
     });
     it(`should call handler with expected arguments`, () => {
       const handler = sinon.spy();
-      (server as any).messageHandlers = {
+      (server as any).messageHandlers = objectToMap({
         [channel]: handler,
-      };
+      });
 
       server.handleMessage(
         channel,
@@ -145,36 +156,85 @@ describe('ServerMqtt', () => {
       publisher({ respond, id });
       expect(
         publisherSpy.calledWith(
-          `${pattern}_res`,
+          `${pattern}/reply`,
           JSON.stringify({ respond, id }),
         ),
       ).to.be.true;
     });
   });
-  describe('getAckPatternName', () => {
+  describe('getRequestPattern', () => {
     const test = 'test';
-    it(`should append _ack to string`, () => {
-      const expectedResult = test + '_ack';
-      expect(server.getAckQueueName(test)).to.equal(expectedResult);
+    it(`should leave patern as it is`, () => {
+      expect(server.getRequestPattern(test)).to.equal(test);
     });
   });
-  describe('getResPatternName', () => {
+  describe('getReplyPattern', () => {
     const test = 'test';
-    it(`should append _res to string`, () => {
-      const expectedResult = test + '_res';
-      expect(server.getResQueueName(test)).to.equal(expectedResult);
+    it(`should append "/reply" to string`, () => {
+      const expectedResult = test + '/reply';
+      expect(server.getReplyPattern(test)).to.equal(expectedResult);
     });
   });
-  describe('deserialize', () => {
+  describe('parseMessage', () => {
     it(`should return parsed json`, () => {
       const obj = { test: 'test' };
-      expect(server.deserialize(obj)).to.deep.equal(
+      expect(server.parseMessage(obj)).to.deep.equal(
         JSON.parse(JSON.stringify(obj)),
       );
     });
     it(`should not parse argument if it is not an object`, () => {
       const content = 'test';
-      expect(server.deserialize(content)).to.equal(content);
+      expect(server.parseMessage(content)).to.equal(content);
+    });
+  });
+  describe('handleEvent', () => {
+    const channel = 'test';
+    const data = 'test';
+
+    it('should call handler with expected arguments', () => {
+      const handler = sinon.spy();
+      (server as any).messageHandlers = objectToMap({
+        [channel]: handler,
+      });
+
+      server.handleEvent(
+        channel,
+        { pattern: '', data },
+        new BaseRpcContext([]),
+      );
+      expect(handler.calledWith(data)).to.be.true;
+    });
+  });
+  describe('matchMqttPattern', () => {
+    it('should return true when topic matches with provided pattern', () => {
+      expect(server.matchMqttPattern('root/valid/+', 'root/valid/child')).to.be
+        .true;
+      expect(server.matchMqttPattern('root/valid/#', 'root/valid/child')).to.be
+        .true;
+      expect(
+        server.matchMqttPattern('root/valid/#', 'root/valid/child/grandchild'),
+      ).to.be.true;
+      expect(server.matchMqttPattern('root/+/child', 'root/valid/child')).to.be
+        .true;
+    });
+
+    it('should return false when topic does not matches with provided pattern', () => {
+      expect(server.matchMqttPattern('root/test/+', 'root/invalid/child')).to.be
+        .false;
+      expect(server.matchMqttPattern('root/test/#', 'root/invalid/child')).to.be
+        .false;
+      expect(
+        server.matchMqttPattern(
+          'root/#/grandchild',
+          'root/invalid/child/grandchild',
+        ),
+      ).to.be.false;
+      expect(
+        server.matchMqttPattern(
+          'root/+/grandchild',
+          'root/invalid/child/grandchild',
+        ),
+      ).to.be.false;
     });
   });
 });

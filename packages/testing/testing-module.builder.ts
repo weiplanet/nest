@@ -1,22 +1,22 @@
-import { Logger, Module } from '@nestjs/common';
+import { Logger, LoggerService, Module } from '@nestjs/common';
 import { ModuleMetadata } from '@nestjs/common/interfaces';
 import { ApplicationConfig } from '@nestjs/core/application-config';
 import { NestContainer } from '@nestjs/core/injector/container';
 import { InstanceLoader } from '@nestjs/core/injector/instance-loader';
 import { MetadataScanner } from '@nestjs/core/metadata-scanner';
 import { DependenciesScanner } from '@nestjs/core/scanner';
-import * as deprecate from 'deprecate';
 import { OverrideBy, OverrideByFactoryOptions } from './interfaces';
 import { TestingLogger } from './services/testing-logger.service';
 import { TestingModule } from './testing-module';
 
 export class TestingModuleBuilder {
   private readonly applicationConfig = new ApplicationConfig();
-  private readonly container = new NestContainer();
+  private readonly container = new NestContainer(this.applicationConfig);
   private readonly overloadsMap = new Map();
   private readonly scanner: DependenciesScanner;
   private readonly instanceLoader = new InstanceLoader(this.container);
   private readonly module: any;
+  private testingLogger: LoggerService;
 
   constructor(metadataScanner: MetadataScanner, metadata: ModuleMetadata) {
     this.scanner = new DependenciesScanner(
@@ -25,56 +25,50 @@ export class TestingModuleBuilder {
       this.applicationConfig,
     );
     this.module = this.createModule(metadata);
-    this.scanner.scan(this.module);
   }
 
-  public overridePipe(typeOrToken): OverrideBy {
+  public setLogger(testingLogger: LoggerService) {
+    this.testingLogger = testingLogger;
+    return this;
+  }
+
+  public overridePipe<T = any>(typeOrToken: T): OverrideBy {
     return this.override(typeOrToken, false);
   }
 
-  public overrideFilter(typeOrToken): OverrideBy {
+  public overrideFilter<T = any>(typeOrToken: T): OverrideBy {
     return this.override(typeOrToken, false);
   }
 
-  public overrideGuard(typeOrToken): OverrideBy {
+  public overrideGuard<T = any>(typeOrToken: T): OverrideBy {
     return this.override(typeOrToken, false);
   }
 
-  public overrideInterceptor(typeOrToken): OverrideBy {
+  public overrideInterceptor<T = any>(typeOrToken: T): OverrideBy {
     return this.override(typeOrToken, false);
   }
 
-  /** @deprecated */
-  public overrideComponent(typeOrToken): OverrideBy {
-    deprecate(
-      'The "overrideComponent()" method is deprecated and will be removed within next major release. Use "overrideProvider()" instead.',
-    );
-    return this.override(typeOrToken, true);
-  }
-
-  public overrideProvider(typeOrToken): OverrideBy {
+  public overrideProvider<T = any>(typeOrToken: T): OverrideBy {
     return this.override(typeOrToken, true);
   }
 
   public async compile(): Promise<TestingModule> {
     this.applyLogger();
+    await this.scanner.scan(this.module);
 
-    [...this.overloadsMap.entries()].map(([component, options]) => {
-      this.container.replace(component, options);
-    });
+    this.applyOverloadsMap();
     await this.instanceLoader.createInstancesOfDependencies();
     this.scanner.applyApplicationProviders();
 
-    const modules = this.container.getModules().values();
-    const root = modules.next().value;
+    const root = this.getRootModule();
     return new TestingModule(this.container, [], root, this.applicationConfig);
   }
 
-  private override(typeOrToken, isComponent: boolean): OverrideBy {
-    const addOverload = options => {
+  private override<T = any>(typeOrToken: T, isProvider: boolean): OverrideBy {
+    const addOverload = (options: any) => {
       this.overloadsMap.set(typeOrToken, {
         ...options,
-        isComponent,
+        isProvider,
       });
       return this;
     };
@@ -82,7 +76,7 @@ export class TestingModuleBuilder {
   }
 
   private createOverrideByBuilder(
-    add: (provider) => TestingModuleBuilder,
+    add: (provider: any) => TestingModuleBuilder,
   ): OverrideBy {
     return {
       useValue: value => add({ useValue: value }),
@@ -92,13 +86,24 @@ export class TestingModuleBuilder {
     };
   }
 
-  private createModule(metadata) {
-    class TestModule {}
-    Module(metadata)(TestModule);
-    return TestModule;
+  private applyOverloadsMap() {
+    [...this.overloadsMap.entries()].forEach(([item, options]) => {
+      this.container.replace(item, options);
+    });
+  }
+
+  private getRootModule() {
+    const modules = this.container.getModules().values();
+    return modules.next().value;
+  }
+
+  private createModule(metadata: ModuleMetadata) {
+    class RootTestModule {}
+    Module(metadata)(RootTestModule);
+    return RootTestModule;
   }
 
   private applyLogger() {
-    Logger.overrideLogger(new TestingLogger());
+    Logger.overrideLogger(this.testingLogger || new TestingLogger());
   }
 }

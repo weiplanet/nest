@@ -1,8 +1,7 @@
-import * as sinon from 'sinon';
 import { expect } from 'chai';
-import { Observable, of } from 'rxjs';
+import { of } from 'rxjs';
+import * as sinon from 'sinon';
 import { InterceptorsConsumer } from '../../interceptors/interceptors-consumer';
-import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context.host';
 
 describe('InterceptorsConsumer', () => {
   let consumer: InterceptorsConsumer;
@@ -11,10 +10,12 @@ describe('InterceptorsConsumer', () => {
     consumer = new InterceptorsConsumer();
     interceptors = [
       {
-        intercept: sinon.stub().returns(of(true)),
+        intercept: sinon.stub().callsFake((ctx, handler) => handler.handle()),
       },
       {
-        intercept: sinon.stub().returns(of(true)),
+        intercept: sinon
+          .stub()
+          .callsFake(async (ctx, handler) => handler.handle()),
       },
     ];
   });
@@ -32,7 +33,7 @@ describe('InterceptorsConsumer', () => {
     describe('when interceptors array is not empty', () => {
       let next: sinon.SinonSpy;
       beforeEach(() => {
-        next = sinon.spy();
+        next = sinon.stub().returns(Promise.resolve(''));
       });
       it('should call every `intercept` method', async () => {
         await consumer.intercept(
@@ -56,6 +57,26 @@ describe('InterceptorsConsumer', () => {
         );
         expect(next.called).to.be.false;
       });
+      it('should call `next` when subscribe', async () => {
+        async function transformToResult(resultOrDeferred: any) {
+          if (
+            resultOrDeferred &&
+            typeof resultOrDeferred.subscribe === 'function'
+          ) {
+            return resultOrDeferred.toPromise();
+          }
+          return resultOrDeferred;
+        }
+        const intercepted = await consumer.intercept(
+          interceptors,
+          null,
+          { constructor: null },
+          null,
+          next,
+        );
+        await transformToResult(intercepted);
+        expect(next.called).to.be.true;
+      });
     });
   });
   describe('createContext', () => {
@@ -73,18 +94,18 @@ describe('InterceptorsConsumer', () => {
       it('should return Observable', async () => {
         const val = 3;
         const next = async () => val;
-        expect(
-          await await consumer.transformDeffered(next).toPromise(),
-        ).to.be.eql(val);
+        expect(await consumer.transformDeffered(next).toPromise()).to.be.eql(
+          val,
+        );
       });
     });
     describe('when next() result is Promise', () => {
       it('should return Observable', async () => {
         const val = 3;
-        const next = () => Promise.resolve(val);
-        expect(
-          await await consumer.transformDeffered(next).toPromise(),
-        ).to.be.eql(val);
+        const next = async () => val;
+        expect(await consumer.transformDeffered(next).toPromise()).to.be.eql(
+          val,
+        );
       });
     });
     describe('when next() result is Observable', () => {

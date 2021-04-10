@@ -1,4 +1,4 @@
-// tslint:disable:adjacent-overload-signatures
+/* eslint-disable @typescript-eslint/adjacent-overload-signatures */
 
 export interface RetryStrategyOptions {
   error: Error;
@@ -37,7 +37,7 @@ export interface ClientOpts {
   url?: string;
 }
 
-export interface RedisClient extends NodeJS.EventEmitter {
+export interface RedisClient {
   // event: connect
   // event: error
   // event: message
@@ -82,18 +82,16 @@ export interface RedisClient extends NodeJS.EventEmitter {
   // Strings (http://redis.io/commands#strings)
   append(key: string, value: string, callback?: any): boolean;
   bitcount(key: string, callback?: any): boolean;
-  bitcount(
-    key: string,
-    start: number,
-    end: number,
-    callback?: any,
-  ): boolean;
+  bitcount(key: string, start: number, end: number, callback?: any): boolean;
   set(key: string, value: string, callback?: any): boolean;
   get(key: string, callback?: any): boolean;
   exists(key: string, value: string, callback?: any): boolean;
 
   publish(channel: string, value: any): boolean;
   subscribe(channel: string): boolean;
+  on(event: string, callback: Function): any;
+  off(event: string, callback: Function): any;
+  addListener(event: string, callback: Function): any;
 
   /*
    commands = set_union([
